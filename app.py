@@ -4,20 +4,24 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from signal_utils import calculate_energy, calculate_power, is_periodic, analyze_expression_causality, get_causality_explanation
 from sample_signals import get_sample_signals
-import sounddevice as sd
-import soundfile as sf
 import sympy as sp
 
+# Audio imports with error handling for deployment
+try:
+    import sounddevice as sd
+    import soundfile as sf
+    AUDIO_ENABLED = True
+except ImportError:
+    AUDIO_ENABLED = False
+    st.sidebar.warning("⚠️ Audio recording disabled for cloud deployment")
 
 st.title("Signal Type Analyzer")
-
 
 # --- Initialize session state for voice recording ---
 if "voice_recorded" not in st.session_state:
     st.session_state.voice_recorded = False
     st.session_state.signal = None
     st.session_state.time_axis = None
-
 
 # --- Load predefined signals ---
 signals = get_sample_signals()
@@ -26,21 +30,21 @@ options = list(signals.keys()) + [
     "Derivative of Signal", 
     "Integral of Signal",
     "Amplitude Scaling",
-    "Custom Input",
-    "Real-Time Voice Signal"
+    "Custom Input"
 ]
 
+# Only add voice recording option if audio is enabled
+if AUDIO_ENABLED:
+    options.append("Real-Time Voice Signal")
 
 # --- Dropdown selection ---
 option = st.selectbox("Select a sample signal or input your own:", options)
-
 
 # --- Initialize variables ---
 signal = None
 time_axis = None
 signal_type = 'Discrete'  # Default signal type
 signal_input = None  # Store mathematical expression if applicable
-
 
 # --- Helper function for proper variable detection ---
 def detect_signal_variables(expression):
@@ -65,13 +69,11 @@ def detect_signal_variables(expression):
     except:
         return False, False, set()
 
-
 # --- Predefined signals ---
 if option in signals:
     signal = signals[option]
     time_axis = np.arange(len(signal))
     signal_type = 'Discrete'
-
 
 # --- Signal Operations ---
 elif option in ["Modulus of Signal", "Derivative of Signal", "Integral of Signal", "Amplitude Scaling"]:
@@ -378,7 +380,6 @@ elif option in ["Modulus of Signal", "Derivative of Signal", "Integral of Signal
             st.error(f"Error in signal operation: {e}")
             signal = None
 
-
 # --- Custom Input ---
 elif option == "Custom Input":
     st.subheader("Custom Signal Definition")
@@ -651,9 +652,8 @@ elif option == "Custom Input":
             signal_type = None
             time_axis = None
 
-
-# --- Real-Time Voice Signal ---
-elif option == "Real-Time Voice Signal":
+# --- Real-Time Voice Signal (only if audio is enabled) ---
+elif option == "Real-Time Voice Signal" and AUDIO_ENABLED:
     st.subheader("Input Voice Signal")
     input_mode = st.radio("Choose Input Mode:", ["Record Real-Time Voice", "Upload WAV File"])
     
@@ -711,7 +711,6 @@ elif option == "Real-Time Voice Signal":
             except Exception as e:
                 st.error(f"Error loading audio file: {e}")
 
-
 # --- CSV Upload Support ---
 uploaded_file = st.file_uploader("Or upload a CSV file (with columns 'time' and 'amplitude')", type=['csv'])
 if uploaded_file is not None:
@@ -726,7 +725,6 @@ if uploaded_file is not None:
             st.error("CSV must contain 'time' and 'amplitude' columns.")
     except Exception as e:
         st.error(f"Error reading file: {e}")
-
 
 # --- Visualization & Analysis ---
 if signal is not None and time_axis is not None and len(signal) > 0:
@@ -768,7 +766,7 @@ if signal is not None and time_axis is not None and len(signal) > 0:
             ax.plot(time_axis, signal)
             ax.set_xlabel('t (seconds)')
             ax.set_title("Continuous-Time Signal")
-    elif option == "Real-Time Voice Signal":
+    elif option == "Real-Time Voice Signal" and AUDIO_ENABLED:
         display_type = st.radio("Choose waveform type to display:", ["Continuous-Time", "Discrete-Time"])
         if display_type == "Discrete-Time":
             # Downsample for discrete display if signal is too long
@@ -823,7 +821,7 @@ if signal is not None and time_axis is not None and len(signal) > 0:
             causal = True
         elif option in ["Modulus of Signal", "Derivative of Signal", "Integral of Signal", "Amplitude Scaling"]:
             # For signal operations, inherit causality from base signal
-            if base_input_expr:
+            if 'base_input_expr' in locals() and base_input_expr:
                 has_t, has_n, var_names = detect_signal_variables(base_input_expr)
                 variable = 't' if has_t else 'n' if has_n else 't'
                 causal, causality_analysis = analyze_expression_causality(base_input_expr, variable)
@@ -1110,8 +1108,8 @@ if signal is not None and time_axis is not None and len(signal) > 0:
                 if causality_analysis.get('shifts_found'):
                     st.markdown("### **Time Shift Examples**")
                     
-                    example_time = 1.0 if 't' in (signal_input or base_input_expr or "") else 1
-                    var_name = 't' if 't' in (signal_input or base_input_expr or "") else 'n'
+                    example_time = 1.0 if 't' in (signal_input or locals().get('base_input_expr', '') or "") else 1
+                    var_name = 't' if 't' in (signal_input or locals().get('base_input_expr', '') or "") else 'n'
                     
                     for shift in causality_analysis['shifts_found']:
                         shift_expr = shift['expression']
