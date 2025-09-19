@@ -3,6 +3,7 @@ matplotlib
 streamlit
 streamlit-audiorec
 scipy
-Pandas
+pandas
 sympy
+
 
