@@ -6,14 +6,19 @@ from signal_utils import calculate_energy, calculate_power, is_periodic, analyze
 from sample_signals import get_sample_signals
 import sympy as sp
 
-# Audio imports with error handling for deployment
+# Import browser-based audio recorder (works in cloud deployment)
 try:
-    import sounddevice as sd
-    import soundfile as sf
+    from st_audiorec import st_audiorec
     AUDIO_ENABLED = True
 except ImportError:
-    AUDIO_ENABLED = False
-    st.sidebar.warning("⚠️ Audio recording disabled for cloud deployment")
+    try:
+        # Fallback to local sounddevice if available
+        import sounddevice as sd
+        import soundfile as sf
+        AUDIO_ENABLED = "local"
+    except ImportError:
+        AUDIO_ENABLED = False
+        st.sidebar.warning("⚠️ Audio recording not available - install streamlit-audiorec")
 
 st.title("Signal Type Analyzer")
 
@@ -22,6 +27,7 @@ if "voice_recorded" not in st.session_state:
     st.session_state.voice_recorded = False
     st.session_state.signal = None
     st.session_state.time_axis = None
+    st.session_state.audio_data = None
 
 # --- Load predefined signals ---
 signals = get_sample_signals()
@@ -30,12 +36,9 @@ options = list(signals.keys()) + [
     "Derivative of Signal", 
     "Integral of Signal",
     "Amplitude Scaling",
-    "Custom Input"
+    "Custom Input",
+    "Real-Time Voice Signal"
 ]
-
-# Only add voice recording option if audio is enabled
-if AUDIO_ENABLED:
-    options.append("Real-Time Voice Signal")
 
 # --- Dropdown selection ---
 option = st.selectbox("Select a sample signal or input your own:", options)
@@ -652,64 +655,171 @@ elif option == "Custom Input":
             signal_type = None
             time_axis = None
 
-# --- Real-Time Voice Signal (only if audio is enabled) ---
-elif option == "Real-Time Voice Signal" and AUDIO_ENABLED:
-    st.subheader("Input Voice Signal")
-    input_mode = st.radio("Choose Input Mode:", ["Record Real-Time Voice", "Upload WAV File"])
+# --- Real-Time Voice Signal (with browser-based recording) ---
+elif option == "Real-Time Voice Signal":
+    st.subheader("🎤 Real-Time Voice Signal Recording")
     
-    if input_mode == "Record Real-Time Voice":
-        duration = st.slider("Select recording duration (seconds):", 1, 10, 3)
-        sample_rate = 44100
-        
-        if not st.session_state.voice_recorded:
-            if st.button("Start Recording"):
-                try:
-                    st.info("Recording in progress...")
-                    recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-                    sd.wait()
-                    signal = recording.flatten()
-                    time_axis = np.linspace(0, duration, len(signal))
-                    st.session_state.signal = signal
-                    st.session_state.time_axis = time_axis
-                    st.session_state.voice_recorded = True
-                    st.success("Recording completed!")
-                except Exception as e:
-                    st.error(f"Recording failed: {e}")
-        else:
-            st.success("Voice already recorded.")
-            if st.button("Record Again"):
-                try:
-                    st.info("Re-recording in progress...")
-                    recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-                    sd.wait()
-                    signal = recording.flatten()
-                    time_axis = np.linspace(0, duration, len(signal))
-                    st.session_state.signal = signal
-                    st.session_state.time_axis = time_axis
-                    st.success("Re-recording completed!")
-                except Exception as e:
-                    st.error(f"Re-recording failed: {e}")
-                    
-        if st.session_state.voice_recorded and st.session_state.signal is not None:
-            signal = st.session_state.signal
-            time_axis = st.session_state.time_axis
-            signal_type = 'Continuous'
-            
+    if not AUDIO_ENABLED:
+        st.error("Audio recording not available. Please install: `pip install streamlit-audiorec`")
     else:
-        uploaded_audio = st.file_uploader("Upload your .wav file", type=['wav'])
-        if uploaded_audio is not None:
-            try:
-                data, sample_rate = sf.read(uploaded_audio)
-                if data.ndim > 1:  # Handle multi-channel audio
-                    signal = data[:, 0]  # Take first channel
+        st.info("Click the microphone button below to start/stop recording. Works in both local and cloud deployments!")
+        
+        # Browser-based audio recorder that works in Streamlit Cloud
+        if AUDIO_ENABLED == True:  # streamlit-audiorec is available
+            # Professional audio recording interface
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown("### 🎙️ Voice Recording")
+                
+                # Record audio using browser microphone
+                wav_audio_data = st_audiorec()
+                
+                if wav_audio_data is not None:
+                    st.success("✅ Recording completed successfully!")
+                    
+                    # Display audio player
+                    st.audio(wav_audio_data, format='audio/wav')
+                    
+                    # Convert to numpy array for analysis
+                    try:
+                        import io
+                        import wave
+                        
+                        # Read WAV data
+                        audio_io = io.BytesIO(wav_audio_data)
+                        with wave.open(audio_io, 'rb') as wav_file:
+                            # Get audio parameters
+                            sample_rate = wav_file.getframerate()
+                            n_channels = wav_file.getnchannels()
+                            n_frames = wav_file.getnframes()
+                            duration = n_frames / sample_rate
+                            
+                            # Read audio data
+                            audio_data = wav_file.readframes(n_frames)
+                            
+                        # Convert to numpy array
+                        if wav_file.getsampwidth() == 2:  # 16-bit
+                            signal = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+                        else:  # 32-bit or other
+                            signal = np.frombuffer(audio_data, dtype=np.float32)
+                        
+                        # Handle stereo by taking first channel
+                        if n_channels > 1:
+                            signal = signal[::n_channels]
+                        
+                        # Create time axis
+                        time_axis = np.linspace(0, duration, len(signal))
+                        signal_type = 'Continuous'
+                        
+                        # Store in session state
+                        st.session_state.signal = signal
+                        st.session_state.time_axis = time_axis
+                        st.session_state.audio_data = wav_audio_data
+                        st.session_state.voice_recorded = True
+                        
+                    except Exception as e:
+                        st.error(f"Error processing audio: {e}")
+                        signal = None
                 else:
-                    signal = data
-                duration = len(signal) / sample_rate
-                time_axis = np.linspace(0, duration, len(signal))
+                    # Check if we have previous recording
+                    if st.session_state.voice_recorded and st.session_state.signal is not None:
+                        st.info("Previous recording available. Record new audio to replace it.")
+                        signal = st.session_state.signal
+                        time_axis = st.session_state.time_axis
+                        signal_type = 'Continuous'
+                        
+                        # Display previous recording
+                        if st.session_state.audio_data is not None:
+                            st.audio(st.session_state.audio_data, format='audio/wav')
+                    else:
+                        st.info("Click the microphone button to start recording")
+                        signal = None
+            
+            with col2:
+                st.markdown("### 📊 Recording Info")
+                
+                if wav_audio_data is not None or (st.session_state.voice_recorded and st.session_state.signal is not None):
+                    current_signal = signal if wav_audio_data is not None else st.session_state.signal
+                    current_time = time_axis if wav_audio_data is not None else st.session_state.time_axis
+                    
+                    if current_signal is not None and current_time is not None:
+                        # Display recording statistics
+                        duration = np.max(current_time) - np.min(current_time)
+                        sample_rate = len(current_signal) / duration if duration > 0 else 44100
+                        
+                        st.metric("Duration", f"{duration:.2f} sec")
+                        st.metric("Sample Rate", f"{sample_rate:.0f} Hz")
+                        st.metric("Samples", f"{len(current_signal):,}")
+                        st.metric("Amplitude Range", f"[{np.min(current_signal):.3f}, {np.max(current_signal):.3f}]")
+                        
+                        # Signal quality indicators
+                        rms_level = np.sqrt(np.mean(current_signal**2))
+                        max_level = np.max(np.abs(current_signal))
+                        
+                        st.markdown("### 🔊 Signal Quality")
+                        st.metric("RMS Level", f"{rms_level:.4f}")
+                        st.metric("Peak Level", f"{max_level:.4f}")
+                        
+                        if max_level > 0.95:
+                            st.warning("⚠️ Signal may be clipped")
+                        elif max_level < 0.01:
+                            st.warning("⚠️ Signal level very low")
+                        else:
+                            st.success("✅ Good signal level")
+                            
+                else:
+                    st.info("Record audio to see statistics")
+                    
+                # Recording tips
+                st.markdown("### 💡 Recording Tips")
+                st.markdown("""
+                - **Speak clearly** into your microphone
+                - **Minimize background noise**
+                - **Avoid clipping** (speaking too loud)
+                - **Test your microphone** first
+                - **Use headphones** to prevent feedback
+                """)
+        
+        elif AUDIO_ENABLED == "local":  # Fallback to sounddevice for local use
+            st.warning("Using local sounddevice (may not work in cloud deployment)")
+            
+            duration = st.slider("Select recording duration (seconds):", 1, 10, 3)
+            sample_rate = 44100
+            
+            if not st.session_state.voice_recorded:
+                if st.button("🎙️ Start Recording"):
+                    try:
+                        st.info("Recording in progress...")
+                        recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+                        sd.wait()
+                        signal = recording.flatten()
+                        time_axis = np.linspace(0, duration, len(signal))
+                        st.session_state.signal = signal
+                        st.session_state.time_axis = time_axis
+                        st.session_state.voice_recorded = True
+                        st.success("Recording completed!")
+                    except Exception as e:
+                        st.error(f"Recording failed: {e}")
+            else:
+                st.success("Voice already recorded.")
+                if st.button("🔄 Record Again"):
+                    try:
+                        st.info("Re-recording in progress...")
+                        recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+                        sd.wait()
+                        signal = recording.flatten()
+                        time_axis = np.linspace(0, duration, len(signal))
+                        st.session_state.signal = signal
+                        st.session_state.time_axis = time_axis
+                        st.success("Re-recording completed!")
+                    except Exception as e:
+                        st.error(f"Re-recording failed: {e}")
+                        
+            if st.session_state.voice_recorded and st.session_state.signal is not None:
+                signal = st.session_state.signal
+                time_axis = st.session_state.time_axis
                 signal_type = 'Continuous'
-                st.success("Audio file loaded successfully.")
-            except Exception as e:
-                st.error(f"Error loading audio file: {e}")
 
 # --- CSV Upload Support ---
 uploaded_file = st.file_uploader("Or upload a CSV file (with columns 'time' and 'amplitude')", type=['csv'])
@@ -766,7 +876,7 @@ if signal is not None and time_axis is not None and len(signal) > 0:
             ax.plot(time_axis, signal)
             ax.set_xlabel('t (seconds)')
             ax.set_title("Continuous-Time Signal")
-    elif option == "Real-Time Voice Signal" and AUDIO_ENABLED:
+    elif option == "Real-Time Voice Signal":
         display_type = st.radio("Choose waveform type to display:", ["Continuous-Time", "Discrete-Time"])
         if display_type == "Discrete-Time":
             # Downsample for discrete display if signal is too long
@@ -1162,10 +1272,11 @@ if signal is not None and time_axis is not None and len(signal) > 0:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("Recording Start", "t = 0")
-                    st.metric("Duration", f"{np.max(time_axis):.3f}s")
+                    if len(time_axis) > 0:
+                        st.metric("Duration", f"{np.max(time_axis):.3f}s")
                 with col2:
                     st.metric("Total Samples", len(signal))
-                    st.metric("Sample Rate", "44.1 kHz")
+                    st.metric("Quality", "Browser Audio")
                     
             else:
                 st.success("**Signal is assumed CAUSAL**")
