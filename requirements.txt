@@ -1,6 +1,7 @@
 numpy
 matplotlib
 streamlit
-sounddevice
+streamlit-audiorec
 scipy
+
 sympy
